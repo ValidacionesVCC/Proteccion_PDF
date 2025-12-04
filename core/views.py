@@ -3,14 +3,28 @@ import json
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 
+
+# =====================================================
+#  ENDPOINT DE SALUD
+# =====================================================
+@csrf_exempt
+def health(request):
+    return JsonResponse({"status": "ok", "message": "Proteccion PDF activo"})
+
+
+# =====================================================
+#  🔥 NUEVO ENDPOINT DE DEPURACIÓN
+#  MUESTRA EXACTAMENTE LO QUE ENVÍA POWER AUTOMATE
+# =====================================================
 @csrf_exempt
 def proteger_pdf(request):
     try:
+        # cuerpo raw (bytes)
         raw = request.body
 
         return JsonResponse({
             "raw_bytes_length": len(raw),
-            "raw_body_as_text": raw.decode("utf-8", errors="ignore")[:5000],
+            "raw_body_as_text": raw.decode("utf-8", errors="ignore")[:8000],
             "content_type_header": request.headers.get("Content-Type", "NO HEADER"),
             "message": "Esto es EXACTAMENTE lo que está enviando Power Automate."
         }, status=200)
@@ -19,20 +33,10 @@ def proteger_pdf(request):
         return JsonResponse({"error": str(exc)}, status=500)
 
 
-
 # =====================================================
-#   ESTA ES LA FUNCIÓN QUE PEDISTE REEMPLAZAR
+#  🔥 FUNCIÓN ORIGINAL (NO USADA AHORA)
+#  Solo queda abajo para restaurarla si la necesitas
 # =====================================================
-@csrf_exempt
-def proteger_pdf(request):
-    return JsonResponse({"test": "ESTE ES EL CODIGO NUEVO"}, status=200)
-
-
-# =====================================================
-#  ESTA ES LA FUNCIÓN ORIGINAL (NO USADA AHORA)
-#  *Te la dejo abajo intacta por si quieres volver a usarla*
-# =====================================================
-
 @csrf_exempt
 def proteger_pdf_original(request):
     if request.method != "POST":
@@ -103,4 +107,3 @@ def proteger_pdf_original(request):
             {"error": f"Error interno: {str(exc)}"},
             status=500,
         )
-
