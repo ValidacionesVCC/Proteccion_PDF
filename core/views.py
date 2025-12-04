@@ -1,62 +1,67 @@
 import base64
-import json
-import io
+import tempfile
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from pdf2image import convert_from_bytes
 
-# ======================
-# HEALTH CHECK (OBLIGATORIO)
-# ======================
-@csrf_exempt
+
+# ---------------------------------------------------------
+# ENDPOINT DE SALUD
+# ---------------------------------------------------------
 def health(request):
     return JsonResponse({"status": "ok", "message": "Servidor activo"})
 
-# ======================
-# CONVERTIR PDF A IMÁGENES
-# ======================
+
+# ---------------------------------------------------------
+# ENDPOINT PRINCIPAL: Convertir PDF a imágenes
+# ---------------------------------------------------------
 @csrf_exempt
 def convertir_pdf_imagenes(request):
-
     if request.method != "POST":
         return JsonResponse({"error": "Solo se permite POST"}, status=405)
 
     try:
-        raw = request.body.decode("utf-8", errors="ignore")
+        # Obtener JSON del body
+        data = request.json if hasattr(request, "json") else None
+        if data is None:
+            # Django no parsea automáticamente JSON; debemos hacerlo manualmente
+            import json
+            body_unicode = request.body.decode("utf-8")
+            data = json.loads(body_unicode)
+
+        # Validaciones
+        if "content" not in data:
+            return JsonResponse({"error": "El JSON debe incluir 'content' (PDF en base64)"}, status=400)
+
+        # Base64 del PDF
+        pdf_base64 = data["content"]
 
         try:
-            data = json.loads(raw)
-        except:
-            return JsonResponse(
-                {"error": "Power Automate debe enviar JSON válido con '$content'."},
-                status=400,
-            )
+            pdf_bytes = base64.b64decode(pdf_base64)
+        except Exception:
+            return JsonResponse({"error": "Base64 inválido"}, status=400)
 
-        if "$content" not in data:
-            return JsonResponse({"error": "No se recibió '$content'."}, status=400)
+        # Convertir PDF a imágenes
+        images = convert_from_bytes(pdf_bytes, dpi=200)
 
-        pdf_bytes = base64.b64decode(data["$content"])
+        imagenes_respuesta = []
+        pagina = 1
 
-        if not pdf_bytes.startswith(b"%PDF"):
-            return JsonResponse({"error": "El archivo no es PDF válido."}, status=400)
+        # Convertimos cada página a base64
+        for img in images:
+            with tempfile.NamedTemporaryFile(suffix=".jpg") as tmp:
+                img.save(tmp.name, "JPEG")
+                with open(tmp.name, "rb") as f:
+                    imagen_base64 = base64.b64encode(f.read()).decode("utf-8")
 
-        imagenes = convert_from_bytes(pdf_bytes)
-
-        lista = []
-        for i, img in enumerate(imagenes):
-            buff = io.BytesIO()
-            img.save(buff, format="JPEG", quality=92)
-            b64 = base64.b64encode(buff.getvalue()).decode()
-
-            lista.append({
-                "pagina": i + 1,
-                "imagen_base64": b64
+            imagenes_respuesta.append({
+                "pagina": pagina,
+                "imagen_base64": imagen_base64
             })
+            pagina += 1
 
-        return JsonResponse({
-            "total_paginas": len(lista),
-            "imagenes": lista
-        })
+        return JsonResponse({"imagenes": imagenes_respuesta}, status=200)
 
-    except Exception as exc:
-        return JsonResponse({"error": str(exc)}, status=500)
+    except Exception as e:
+        # Captura errores inesperados
+        return JsonResponse({"error": f"Error interno: {str(e)}"}, status=500)
