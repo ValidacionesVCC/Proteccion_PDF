@@ -32,7 +32,7 @@ MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
-    # Quitamos CSRF para simplificar el uso con Power Automate (ya usamos csrf_exempt)
+    # CSRF desactivado para Power Automate
     # "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
@@ -57,9 +57,9 @@ TEMPLATES = [
     },
 ]
 
-WSGI_APPLICATION = "Proteccion_PDF.wsgi.application"
+WSGI_APPLICATION = "Proyecto_Proteccion_PDF.wsgi.application"
 
-# Base de datos mínima (no la usamos mucho, pero Django la necesita)
+# Base de datos mínima (SQLite)
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
@@ -67,31 +67,19 @@ DATABASES = {
     }
 }
 
-# Password validators (dejamos por defecto)
 AUTH_PASSWORD_VALIDATORS = [
-    {
-        "NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator",
-    },
-    {
-        "NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
-    },
-    {
-        "NAME": "django.contrib.auth.password_validation.CommonPasswordValidator",
-    },
-    {
-        "NAME": "django.contrib.auth.password_validation.NumericPasswordValidator",
-    },
+    {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
+    {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
+    {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
+    {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
 ]
 
-# Idioma y zona horaria
 LANGUAGE_CODE = "es-es"
 TIME_ZONE = "UTC"
 USE_I18N = True
 USE_TZ = True
 
-# Archivos estáticos (no los usamos mucho, pero Render los puede servir)
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
-
