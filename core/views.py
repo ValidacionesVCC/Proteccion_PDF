@@ -1,63 +1,61 @@
+import io
 import base64
-import tempfile
-from io import BytesIO
-from django.http import JsonResponse
+from django.http import JsonResponse, HttpResponse
 from django.views.decorators.csrf import csrf_exempt
-from pdf2image import convert_from_path
+from pdf2image import convert_from_bytes
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import letter, A4
+from reportlab.lib.utils import ImageReader
 
 
 @csrf_exempt
 def health(request):
-    """
-    Endpoint simple para verificar que la API está activa.
-    """
-    return JsonResponse({
-        "status": "ok",
-        "message": "Servidor activo"
-    }, status=200)
+    return JsonResponse({"status": "ok", "message": "Servidor activo"})
 
 
 @csrf_exempt
 def convertir_pdf_imagenes(request):
-    """
-    Recibe un archivo PDF en binario (body puro),
-    lo convierte a imágenes JPG en base64 y devuelve
-    un JSON con todas las páginas.
-    Compatible con Power Automate enviando application/pdf.
-    """
+    # Solo permite POST
     if request.method != "POST":
         return JsonResponse({"error": "Solo se permite POST"}, status=405)
 
     try:
-        # request.body AHORA contiene el PDF EN BINARIO
+        # El cuerpo llega como binario crudo desde Power Automate
         pdf_bytes = request.body
 
         if not pdf_bytes:
-            return JsonResponse({"error": "No se recibió contenido PDF"}, status=400)
+            return JsonResponse({"error": "El archivo PDF está vacío"}, status=400)
 
-        # Guardar temporalmente el PDF
-        temp_pdf = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
-        temp_pdf.write(pdf_bytes)
-        temp_pdf.close()
+        # Convertir PDF → imágenes PNG
+        imagenes = convert_from_bytes(pdf_bytes, fmt="png", dpi=200)
 
-        # Convertir PDF → lista de imágenes PIL
-        images = convert_from_path(temp_pdf.name)
+        if not imagenes or len(imagenes) == 0:
+            return JsonResponse({"error": "No fue posible convertir el PDF a imágenes"}, status=500)
 
-        resultado = []
+        # Crear un PDF final basado en imágenes
+        output_pdf = io.BytesIO()
 
-        # Convertir cada página a JPG base64
-        for idx, imagen in enumerate(images):
-            buffer = BytesIO()
-            imagen.save(buffer, format="JPEG")
-            img_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+        # Usamos tamaño carta
+        c = canvas.Canvas(output_pdf, pagesize=A4)
+        width, height = A4
 
-            resultado.append({
-                "pagina": idx + 1,
-                "imagen_base64": img_base64
-            })
+        for img in imagenes:
+            img_bytes = io.BytesIO()
+            img.save(img_bytes, format="PNG")
+            img_bytes.seek(0)
 
-        return JsonResponse({"imagenes": resultado}, status=200)
+            # Dibujar imagen ocupando toda la página
+            c.drawImage(ImageReader(img_bytes), 0, 0, width=width, height=height)
+            c.showPage()
+
+        c.save()
+
+        output_pdf.seek(0)
+
+        # Devolver el PDF final como binario
+        response = HttpResponse(output_pdf.read(), content_type="application/pdf")
+        response['Content-Disposition'] = 'attachment; filename="pdf_protegido.pdf"'
+        return response
 
     except Exception as e:
-        # Devuelve el error exacto para depuración
         return JsonResponse({"error": str(e)}, status=500)
