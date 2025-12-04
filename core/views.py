@@ -1,117 +1,157 @@
-import io
-import os
-import glob
-import tempfile
+import base64
+import json
 
-from django.http import JsonResponse, HttpResponse
+from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
-from PIL import Image
-
-try:
-    import ghostscript
-except ImportError:
-    ghostscript = None
 
 
-def health_check(request):
-    return JsonResponse({"status": "ok", "message": "Proteccion_PDF activo"})
+@csrf_exempt
+def health(request):
+    """
+    Endpoint simple de salud para verificar que el servicio está activo.
+    URL: /api/health/
+    """
+    return JsonResponse(
+        {"status": "ok", "message": "Proteccion_PDF activo"},
+        status=200,
+    )
 
 
 @csrf_exempt
 def proteger_pdf(request):
-    # Solo permitimos POST
-    if request.method != "POST":
-        return JsonResponse({"error": "Solo se permite POST"}, status=405)
+    """
+    Endpoint que recibe un PDF desde Power Automate, en el formato:
 
-    # Validamos que venga un archivo con la clave 'pdf'
-    if "pdf" not in request.FILES:
+        {
+          "$content-type": "application/pdf",
+          "$content": "BASE64_DEL_PDF"
+        }
+
+    y devuelve el MISMO PDF (por ahora sin modificaciones) en el mismo formato:
+
+        {
+          "$content-type": "application/pdf",
+          "$content": "BASE64_DEL_PDF_PROCESADO"
+        }
+
+    Esto es exactamente lo que espera la acción "Crear archivo" de Power Automate.
+    """
+    if request.method != "POST":
         return JsonResponse(
-            {"error": "Debes enviar el archivo PDF en el campo 'pdf'."},
-            status=400,
+            {"error": "Solo se permite POST"},
+            status=405,
         )
 
-    if ghostscript is None:
+    try:
+        # ------------------------------------------------------------------ #
+        # 1) Leer el cuerpo tal cual lo envía Power Automate
+        # ------------------------------------------------------------------ #
+        raw_body = request.body
+
+        if not raw_body:
+            return JsonResponse(
+                {"error": "El cuerpo de la petición está vacío."},
+                status=400,
+            )
+
+        # Siempre vendrá como JSON, aunque el Content-Type sea octet-stream
+        try:
+            body_json = json.loads(raw_body.decode("utf-8"))
+        except json.JSONDecodeError:
+            return JsonResponse(
+                {
+                    "error": (
+                        "Formato de cuerpo no válido. "
+                        "Se esperaba JSON con campos '$content' y '$content-type' "
+                        "tal como lo envía Power Automate."
+                    )
+                },
+                status=400,
+            )
+
+        # ------------------------------------------------------------------ #
+        # 2) Extraer el base64 del PDF
+        # ------------------------------------------------------------------ #
+        content_b64 = (
+            body_json.get("$content")
+            or body_json.get("content")
+            or body_json.get("fileContent")
+        )
+        content_type = body_json.get("$content-type") or body_json.get(
+            "contentType", ""
+        )
+
+        if not content_b64:
+            return JsonResponse(
+                {"error": "No se recibió ningún archivo 'pdf'"},
+                status=400,
+            )
+
+        # Validación opcional de tipo
+        if "pdf" not in content_type.lower():
+            # Si quieres ser más permisivo, puedes quitar esta validación
+            return JsonResponse(
+                {"error": "El contenido recibido no es un PDF (content-type inválido)."},
+                status=400,
+            )
+
+        # ------------------------------------------------------------------ #
+        # 3) Decodificar el base64 a bytes
+        # ------------------------------------------------------------------ #
+        try:
+            pdf_bytes = base64.b64decode(content_b64)
+        except Exception as exc:
+            return JsonResponse(
+                {
+                    "error": (
+                        "No se pudo decodificar el contenido base64 recibido. "
+                        f"Detalle: {str(exc)}"
+                    )
+                },
+                status=400,
+            )
+
+        # Validar de forma muy simple que parezca un PDF
+        if not pdf_bytes.startswith(b"%PDF"):
+            # No devolvemos 500, sino un 400 controlado
+            return JsonResponse(
+                {
+                    "error": (
+                        "El contenido decodificado no parece ser un PDF "
+                        "(no inicia con la cabecera %PDF)."
+                    )
+                },
+                status=400,
+            )
+
+        # ------------------------------------------------------------------ #
+        # 4) PROCESAMIENTO / PROTECCIÓN DEL PDF
+        # ------------------------------------------------------------------ #
+        # En este punto ya tienes los bytes reales del PDF en `pdf_bytes`.
+        # Por ahora (para garantizar estabilidad) simplemente lo devolvemos
+        # sin modificaciones. Más adelante aquí puedes:
+        #   - aplicar contraseña
+        #   - convertir páginas a imágenes
+        #   - aplanar formularios, etc.
+        #
+        # Si más adelante quieres que aquí sí se “proteja” el PDF, lo hacemos,
+        # pero por ahora dejamos la lógica mínima estable.
+        processed_pdf_bytes = pdf_bytes
+
+        # ------------------------------------------------------------------ #
+        # 5) Volver a codificar a base64 para Power Automate
+        # ------------------------------------------------------------------ #
+        processed_b64 = base64.b64encode(processed_pdf_bytes).decode("utf-8")
+
+        response_data = {
+            "$content-type": "application/pdf",
+            "$content": processed_b64,
+        }
+
+        return JsonResponse(response_data, status=200)
+
+    except Exception as exc:  # Seguridad: captura de errores no previstos
         return JsonResponse(
-            {
-                "error": "Ghostscript no está disponible en el servidor. "
-                         "Verifica que apt.txt incluya 'ghostscript' y que el deploy haya sido exitoso."
-            },
+            {"error": f"Error interno en el servidor: {str(exc)}"},
             status=500,
         )
-
-    uploaded_file = request.FILES["pdf"]
-
-    # Creamos un directorio temporal para trabajar
-    with tempfile.TemporaryDirectory() as tmpdir:
-        input_path = os.path.join(tmpdir, "entrada.pdf")
-
-        # Guardamos el PDF recibido en disco
-        with open(input_path, "wb") as f:
-            for chunk in uploaded_file.chunks():
-                f.write(chunk)
-
-        # Salida de las imágenes (una por página)
-        output_pattern = os.path.join(tmpdir, "page-%03d.png")
-
-        # Argumentos para Ghostscript:
-        # - Convertir cada página a PNG de 200 dpi
-        # - Dispositivo en color 24 bits (png16m)
-        gs_args = [
-            "gs",                     # nombre del programa (obligatorio)
-            "-dNOPAUSE",
-            "-dBATCH",
-            "-sDEVICE=png16m",
-            "-r200",                  # resolución (dpi)
-            f"-sOutputFile={output_pattern}",
-            input_path,
-        ]
-
-        try:
-            # Ejecutamos Ghostscript
-            ghostscript.Ghostscript(*gs_args)
-        except Exception as e:
-            return JsonResponse(
-                {
-                    "error": "Error al convertir el PDF a imágenes con Ghostscript.",
-                    "detalle": str(e),
-                },
-                status=500,
-            )
-
-        # Buscamos las imágenes generadas
-        image_files = sorted(glob.glob(os.path.join(tmpdir, "page-*.png")))
-        if not image_files:
-            return JsonResponse(
-                {
-                    "error": "No se pudieron generar imágenes a partir del PDF. "
-                             "Verifica que el PDF no esté dañado."
-                },
-                status=500,
-            )
-
-        # Abrimos las imágenes con Pillow y las convertimos a RGB
-        images = []
-        for img_path in image_files:
-            img = Image.open(img_path).convert("RGB")
-            images.append(img)
-
-        # Construimos un nuevo PDF solo con las imágenes
-        pdf_buffer = io.BytesIO()
-        primera = images[0]
-        restantes = images[1:]
-
-        primera.save(
-            pdf_buffer,
-            format="PDF",
-            save_all=True,
-            append_images=restantes,
-        )
-        pdf_buffer.seek(0)
-
-        # Respondemos el PDF protegido (solo imágenes)
-        response = HttpResponse(
-            pdf_buffer.getvalue(),
-            content_type="application/pdf",
-        )
-        response["Content-Disposition"] = 'attachment; filename="pdf_protegido_imagenes.pdf"'
-        return response
