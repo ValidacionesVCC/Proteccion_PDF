@@ -3,10 +3,21 @@ import json
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 
-
 @csrf_exempt
-def health(request):
-    return JsonResponse({"status": "ok", "message": "Proteccion PDF activo"})
+def proteger_pdf(request):
+    try:
+        raw = request.body
+
+        return JsonResponse({
+            "raw_bytes_length": len(raw),
+            "raw_body_as_text": raw.decode("utf-8", errors="ignore")[:5000],
+            "content_type_header": request.headers.get("Content-Type", "NO HEADER"),
+            "message": "Esto es EXACTAMENTE lo que está enviando Power Automate."
+        }, status=200)
+
+    except Exception as exc:
+        return JsonResponse({"error": str(exc)}, status=500)
+
 
 
 # =====================================================
@@ -92,3 +103,4 @@ def proteger_pdf_original(request):
             {"error": f"Error interno: {str(exc)}"},
             status=500,
         )
+
