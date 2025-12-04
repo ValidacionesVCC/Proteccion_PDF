@@ -1,80 +1,65 @@
 import base64
 import io
-import json
-from django.http import JsonResponse, HttpResponse
-from django.views.decorators.csrf import csrf_exempt
-
-import pypdfium2
+from django.http import JsonResponse
+from pdf2image import convert_from_bytes
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter
-from PIL import Image
+from reportlab.lib.utils import ImageReader
 
 
-# ----------------------------------------------------------
-# API DE SALUD
-# ----------------------------------------------------------
 def health(request):
     return JsonResponse({"status": "ok", "message": "Servidor activo"})
 
 
-# ----------------------------------------------------------
-# API PARA CONVERTIR PDF A IMÁGENES Y DEVOLVER UN PDF FINAL
-# ----------------------------------------------------------
-@csrf_exempt
 def convertir_pdf_imagenes(request):
-
     if request.method != "POST":
         return JsonResponse({"error": "Solo se permite POST"}, status=405)
 
     try:
-        # Obtener contenido enviado por Power Automate
-        pdf_bytes = request.body
+        # Recibir PDF binario
+        pdf_binario = request.body
 
-        if not pdf_bytes:
+        if not pdf_binario:
             return JsonResponse({"error": "No se recibió archivo PDF"}, status=400)
 
-        # ----------------------------------------------------------
-        # 1) Convertir PDF a imágenes usando pypdfium2
-        # ----------------------------------------------------------
-        pdf = pypdfium2.PdfDocument(pdf_bytes)
-        num_pages = len(pdf)
+        # Convertir PDF → Imágenes
+        imagenes = convert_from_bytes(pdf_binario)
 
-        imagenes = []
+        lista_imagenes = []
 
-        for i in range(num_pages):
-            page = pdf[i]
-            bitmap = page.render(scale=2)  # calidad alta
-            pil_image = bitmap.to_pil()
-            imagenes.append(pil_image)
+        # Convertir imágenes a base64
+        for i, img in enumerate(imagenes, start=1):
+            buffer = io.BytesIO()
+            img.save(buffer, format="JPEG")
+            img_b64 = base64.b64encode(buffer.getvalue()).decode()
 
-        # ----------------------------------------------------------
-        # 2) Crear PDF unificado con reportlab
-        # ----------------------------------------------------------
-        final_buffer = io.BytesIO()
-        c = canvas.Canvas(final_buffer, pagesize=letter)
+            lista_imagenes.append({
+                "pagina": i,
+                "imagen_base64": img_b64
+            })
+
+        # Crear PDF uniendo todas las imágenes
+        pdf_salida = io.BytesIO()
+        c = canvas.Canvas(pdf_salida, pagesize=letter)
 
         for img in imagenes:
-            # Convertir PIL a memoria temporal
-            img_buffer = io.BytesIO()
-            img.save(img_buffer, format="JPEG")
-            img_buffer.seek(0)
+            ancho, alto = letter
+            buffer_img = io.BytesIO()
+            img.save(buffer_img, format="JPEG")
+            buffer_img.seek(0)
 
-            # Ajustar tamaño dentro de la hoja
-            page_width, page_height = letter
-            c.drawImage(img_buffer, 0, 0, width=page_width, height=page_height)
+            c.drawImage(ImageReader(buffer_img), 0, 0, width=ancho, height=alto)
             c.showPage()
 
         c.save()
-        final_buffer.seek(0)
 
-        # ----------------------------------------------------------
-        # 3) Devolver PDF final como binario
-        # ----------------------------------------------------------
-        return HttpResponse(
-            final_buffer.read(),
-            content_type="application/pdf",
-            status=200
-        )
+        pdf_b64 = base64.b64encode(pdf_salida.getvalue()).decode()
+
+        # Respuesta final
+        return JsonResponse({
+            "imagenes": lista_imagenes,
+            "pdf_unido": pdf_b64
+        })
 
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
