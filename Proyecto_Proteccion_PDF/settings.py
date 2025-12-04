@@ -39,7 +39,7 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
-ROOT_URLCONF = "Proteccion_PDF.urls"
+ROOT_URLCONF = "Proyecto_Proteccion_PDF.urls"
 
 TEMPLATES = [
     {
@@ -94,3 +94,4 @@ STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
