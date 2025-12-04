@@ -1,65 +1,39 @@
 import base64
-import io
+from io import BytesIO
 from django.http import JsonResponse
-from pdf2image import convert_from_bytes
-from reportlab.pdfgen import canvas
-from reportlab.lib.pagesizes import letter
-from reportlab.lib.utils import ImageReader
+from django.views.decorators.csrf import csrf_exempt
+import pypdfium2 as pdfium
+from PIL import Image
 
-
-def health(request):
-    return JsonResponse({"status": "ok", "message": "Servidor activo"})
-
-
+@csrf_exempt
 def convertir_pdf_imagenes(request):
-    if request.method != "POST":
-        return JsonResponse({"error": "Solo se permite POST"}, status=405)
-
     try:
-        # Recibir PDF binario
-        pdf_binario = request.body
+        if request.method != "POST":
+            return JsonResponse({"error": "Método no permitido"}, status=405)
 
-        if not pdf_binario:
-            return JsonResponse({"error": "No se recibió archivo PDF"}, status=400)
+        pdf_bytes = request.body
+        pdf = pdfium.PdfDocument(pdf_bytes)
 
-        # Convertir PDF → Imágenes
-        imagenes = convert_from_bytes(pdf_binario)
+        imagenes = []
+        for i in range(len(pdf)):
+            page = pdf[i]
+            bitmap = page.render(scale=2)
+            pil_image = bitmap.to_pil()
+            imagenes.append(pil_image)
 
-        lista_imagenes = []
+        # unir imágenes en un solo PDF
+        buffer_pdf = BytesIO()
+        imagenes[0].save(
+            buffer_pdf,
+            format="PDF",
+            save_all=True,
+            append_images=imagenes[1:]
+        )
 
-        # Convertir imágenes a base64
-        for i, img in enumerate(imagenes, start=1):
-            buffer = io.BytesIO()
-            img.save(buffer, format="JPEG")
-            img_b64 = base64.b64encode(buffer.getvalue()).decode()
+        pdf_unido_bytes = buffer_pdf.getvalue()
+        pdf_unido_base64 = base64.b64encode(pdf_unido_bytes).decode("utf-8")
 
-            lista_imagenes.append({
-                "pagina": i,
-                "imagen_base64": img_b64
-            })
-
-        # Crear PDF uniendo todas las imágenes
-        pdf_salida = io.BytesIO()
-        c = canvas.Canvas(pdf_salida, pagesize=letter)
-
-        for img in imagenes:
-            ancho, alto = letter
-            buffer_img = io.BytesIO()
-            img.save(buffer_img, format="JPEG")
-            buffer_img.seek(0)
-
-            c.drawImage(ImageReader(buffer_img), 0, 0, width=ancho, height=alto)
-            c.showPage()
-
-        c.save()
-
-        pdf_b64 = base64.b64encode(pdf_salida.getvalue()).decode()
-
-        # Respuesta final
-        return JsonResponse({
-            "imagenes": lista_imagenes,
-            "pdf_unido": pdf_b64
-        })
+        return JsonResponse({"pdf_unido": pdf_unido_base64})
 
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
