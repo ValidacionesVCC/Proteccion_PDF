@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: Proteccion_PDF
+    env: python
+    rootDir: Proyecto_Proteccion_PDF
+    buildCommand: "pip install -r ../requirements.txt && python manage.py collectstatic --noinput"
+    startCommand: "gunicorn Proyecto_Proteccion_PDF.wsgi:application --bind=0.0.0.0:$PORT"
+    plan: free
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DEBUG
+        value: "False"
+      - key: PYTHON_VERSION
+        value: "3.11.6"
