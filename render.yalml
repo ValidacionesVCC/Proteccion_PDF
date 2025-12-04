@@ -3,13 +3,11 @@ services:
     name: Proteccion_PDF
     env: python
     plan: free
+    rootDir: .
     buildCommand: |
       pip install --upgrade pip
       pip install -r requirements.txt
-    startCommand: gunicorn Proteccion_PDF.wsgi:application --bind 0.0.0.0:$PORT
+    startCommand: gunicorn Proyecto_Proteccion_PDF.wsgi:application --chdir .
     envVars:
       - key: PYTHONUNBUFFERED
         value: "1"
-      # Opcional: puedes definir DJANGO_SECRET_KEY aquí si quieres
-      # - key: DJANGO_SECRET_KEY
-      #   value: "tu-clave-secreta-segura"
