@@ -4,7 +4,7 @@ import os
 # BASE DIR
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# ⚠ En producción deberías usar una clave secreta desde variables de entorno
+# ⚠ Debe venir del entorno en Render
 SECRET_KEY = os.environ.get(
     "DJANGO_SECRET_KEY",
     "cambia-esta-clave-en-produccion",
@@ -12,7 +12,7 @@ SECRET_KEY = os.environ.get(
 
 DEBUG = False
 
-# Render monta el host dinámico, permitimos todo para simplificar
+# Render usa host dinámico
 ALLOWED_HOSTS = ["*"]
 
 # Aplicaciones instaladas
@@ -24,7 +24,7 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
 
-    # App de la API
+    # App core de la API
     "core",
 ]
 
@@ -32,7 +32,7 @@ MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
-    # CSRF desactivado para Power Automate
+    # CSRF desactivado por compatibilidad con Power Automate
     # "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
@@ -59,7 +59,7 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "Proyecto_Proteccion_PDF.wsgi.application"
 
-# Base de datos mínima (SQLite)
+# Base de datos SQLite
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
