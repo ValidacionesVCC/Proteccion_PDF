@@ -2,64 +2,72 @@ import base64
 from io import BytesIO
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
-import pypdfium2 as pdfium
 from PIL import Image
+import pypdfium2 as pdfium
 
+
+# =========================================================
+# 🔵 ENDPOINT DE SALUD (Render lo necesita SIEMPRE)
+# =========================================================
+def health(request):
+    return JsonResponse({"status": "ok"})
+
+
+# =========================================================
+# 🔒 SUPER PROTECCIÓN PDF → IMÁGENES → PDF (DPI 150)
+# =========================================================
 @csrf_exempt
 def convertir_pdf_imagenes(request):
     try:
         if request.method != "POST":
             return JsonResponse({"error": "Método no permitido"}, status=405)
 
-        # ==========================
-        #   1. Recibir PDF original
-        # ==========================
+        # =========================================================
+        # 1️⃣ Recibir PDF en bytes
+        # =========================================================
         pdf_bytes = request.body
         pdf = pdfium.PdfDocument(pdf_bytes)
 
         imagenes = []
-        DPI = 150  # Resolución final: 150 DPI (seguro y rápido)
 
-        # =============================================
-        #   2. Convertir cada página a imagen JPEG irreversible
-        # =============================================
+        # =========================================================
+        # 2️⃣ Convertir cada página → imagen rasterizada
+        # =========================================================
         for i in range(len(pdf)):
             page = pdf[i]
 
-            # Renderizar a bitmap con la escala adecuada
-            scale = DPI / 72
-            bitmap = page.render(scale=scale)
-
-            # Convertir a imagen PIL
+            # render a DPI 150
+            bitmap = page.render(scale=150/72)   # 72 DPI → base
             pil_image = bitmap.to_pil()
 
-            # Convertir a JPEG irreversible y aplanar contenido
-            buffer_jpg = BytesIO()
-            pil_image = pil_image.convert("RGB")  # Garantizar JPEG puro
-            pil_image.save(buffer_jpg, format="JPEG", quality=88)  # calidad segura pero nítida
+            # Convertir a RGB plano (elimina transparencia y capas)
+            rgb_image = pil_image.convert("RGB")
 
-            # Convertir JPG nuevamente a imagen PIL para meter al PDF final
-            jpg_image = Image.open(BytesIO(buffer_jpg.getvalue()))
-            imagenes.append(jpg_image)
+            # Fondo blanco garantizado
+            fondo = Image.new("RGB", rgb_image.size, (255, 255, 255))
+            fondo.paste(rgb_image)
 
-        # ==================================================
-        #   3. Crear un PDF NUEVO 100% aplanado desde imágenes
-        # ==================================================
+            imagenes.append(fondo)
+
+        # =========================================================
+        # 3️⃣ Unir todas las imágenes en 1 solo PDF
+        # =========================================================
         buffer_pdf = BytesIO()
+
         imagenes[0].save(
             buffer_pdf,
             format="PDF",
             save_all=True,
-            append_images=imagenes[1:],
+            append_images=imagenes[1:]
         )
 
+        # =========================================================
+        # 4️⃣ Convertir el PDF final → Base64
+        # =========================================================
         pdf_unido_bytes = buffer_pdf.getvalue()
         pdf_unido_base64 = base64.b64encode(pdf_unido_bytes).decode("utf-8")
 
-        # ===================================
-        #   4. Devolver al flujo de Power Automate
-        # ===================================
-        return JsonResponse({"pdf_unido": pdf_unido_base64})
+        return JsonResponse({"pdf_unido": pdf_unido_base64}, status=200)
 
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
