@@ -4,11 +4,42 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from PIL import Image
 import pypdfium2 as pdfium
-from PyPDF2 import PdfMerger, PdfReader, PdfWriter
 
 
 # =========================================================
-# 🔥 SUPER PROTECCIÓN PDF EN BLOQUES + JPEG DESTRUCTIVO
+# 🔵 HOME PAGE PARA RUTA "/"
+# =========================================================
+def home(request):
+    return JsonResponse({"status": "Servidor Proteccion PDF activo"})
+
+
+# =========================================================
+# 🔵 ENDPOINT DE SALUD (Render lo usa para verificar vida)
+# =========================================================
+def health(request):
+    return JsonResponse({"status": "ok"})
+
+
+# =========================================================
+# 🟦 FUNCIÓN → PROCESAR PDF POR BLOQUES DE 25 PÁGINAS
+# =========================================================
+def procesar_bloques(pdf, tamano_bloque=25):
+    """
+    Divide el PDF en bloques para evitar consumo de RAM.
+    Si un PDF tiene menos de 25 páginas, igual se procesa normalmente.
+    """
+    total_paginas = len(pdf)
+    bloques = []
+
+    for inicio in range(0, total_paginas, tamano_bloque):
+        fin = min(inicio + tamano_bloque, total_paginas)
+        bloques.append((inicio, fin))
+
+    return bloques
+
+
+# =========================================================
+# 🔒 PROTECCIÓN PDF (Raster → Imagen → PDF) CON BLOQUES
 # =========================================================
 @csrf_exempt
 def convertir_pdf_imagenes(request):
@@ -16,101 +47,55 @@ def convertir_pdf_imagenes(request):
         if request.method != "POST":
             return JsonResponse({"error": "Método no permitido"}, status=405)
 
-        # PDF original completo
+        # 1️⃣ Recibir PDF en bytes
         pdf_bytes = request.body
         pdf = pdfium.PdfDocument(pdf_bytes)
-        total_paginas = len(pdf)
 
-        # 🔹 Tamaño del bloque
-        BLOQUE = 25
+        # 2️⃣ Obtener bloques (tamaño fijo: 25 páginas)
+        bloques = procesar_bloques(pdf, tamano_bloque=25)
 
-        pdfs_procesados = []
+        # Buffer final del PDF completo
+        buffer_final = BytesIO()
+        pdf_final_paginas = []
 
-        # =========================================================
-        # 🔵 PROCESAR EL PDF EN BLOQUES DE 25 PAGINAS
-        # =========================================================
-        for inicio in range(0, total_paginas, BLOQUE):
-            fin = min(inicio + BLOQUE, total_paginas)
+        # 3️⃣ Procesar bloque por bloque
+        for inicio, fin in bloques:
+
             imagenes_bloque = []
 
             for i in range(inicio, fin):
+
                 page = pdf[i]
 
-                # Render de página (150 DPI)
+                # Render a DPI 150
                 bitmap = page.render(scale=150/72)
                 pil_image = bitmap.to_pil()
 
-                # Convertir a RGB
-                rgb = pil_image.convert("RGB")
+                # Convertir a RGB plano con fondo blanco (anti extracción)
+                rgb_image = pil_image.convert("RGB")
+                fondo = Image.new("RGB", rgb_image.size, (255, 255, 255))
+                fondo.paste(rgb_image)
 
-                # =====================================================
-                # 🔥 CAPA DE SEGURIDAD 1 — CONVERTIR A JPEG DESTRUCTIVO
-                # (rompe toda capa vectorial y textual oculta)
-                jpeg_buffer = BytesIO()
-                rgb.save(jpeg_buffer, format="JPEG", quality=85)
-                jpeg_buffer.seek(0)
-
-                # Volver a abrir como imagen pura JPEG
-                jpg_image = Image.open(jpeg_buffer)
-
-                # Fondo blanco (asegura raster 100%)
-                fondo = Image.new("RGB", jpg_image.size, (255, 255, 255))
-                fondo.paste(jpg_image)
-
+                # Guardamos temporalmente en memoria
                 imagenes_bloque.append(fondo)
 
-            # Crear PDF del bloque procesado
-            buffer_bloque = BytesIO()
-            imagenes_bloque[0].save(
-                buffer_bloque,
-                format="PDF",
-                save_all=True,
-                append_images=imagenes_bloque[1:]
-            )
-            pdfs_procesados.append(buffer_bloque.getvalue())
+            # Agregar imágenes procesadas a lista final
+            pdf_final_paginas.extend(imagenes_bloque)
 
+        # 4️⃣ Unir TODAS las páginas procesadas en un solo PDF final
+        buffer_pdf = BytesIO()
+        pdf_final_paginas[0].save(
+            buffer_pdf,
+            format="PDF",
+            save_all=True,
+            append_images=pdf_final_paginas[1:]
+        )
 
-        # =========================================================
-        # 🔵 UNIR TODOS LOS PDFs BLOQUE EN UN SOLO PDF FINAL
-        # =========================================================
-        merger = PdfMerger()
-        for pdf_b in pdfs_procesados:
-            merger.append(BytesIO(pdf_b))
+        # 5️⃣ Convertir a Base64 para enviar al flujo de Power Automate
+        pdf_unido_bytes = buffer_pdf.getvalue()
+        pdf_unido_base64 = base64.b64encode(pdf_unido_bytes).decode("utf-8")
 
-        buffer_unido = BytesIO()
-        merger.write(buffer_unido)
-        merger.close()
-
-        pdf_unido_bytes = buffer_unido.getvalue()
-
-        # =========================================================
-        # 🔥 LIMPIAR METADATA (sin cifrado)
-        # =========================================================
-        reader = PdfReader(BytesIO(pdf_unido_bytes))
-        writer = PdfWriter()
-
-        for page in reader.pages:
-            writer.add_page(page)
-
-        writer.add_metadata({
-            "/Title": "",
-            "/Author": "",
-            "/Subject": "",
-            "/Keywords": "",
-            "/Creator": "",
-            "/Producer": "",
-        })
-
-        # Guardar PDF final SIN CONTRASEÑA
-        buffer_final = BytesIO()
-        writer.write(buffer_final)
-        pdf_final_bytes = buffer_final.getvalue()
-
-        # Respuesta Base64 para Power Automate
-        pdf_base64 = base64.b64encode(pdf_final_bytes).decode("utf-8")
-
-        return JsonResponse({"pdf_unido": pdf_base64}, status=200)
+        return JsonResponse({"pdf_unido": pdf_unido_base64}, status=200)
 
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
-
