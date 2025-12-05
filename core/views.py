@@ -29,30 +29,58 @@ def convertir_pdf_imagenes(request):
         if request.method != "POST":
             return JsonResponse({"error": "Método no permitido"}, status=405)
 
-        # 1️⃣ Recibir PDF crudo en bytes
-        pdf_bytes = request.body
-        pdf = pdfium.PdfDocument(pdf_bytes)
+        # -----------------------------------------------------
+        # 1️⃣ RECIBIR PDF EN RAW (BINARIO O BASE64)
+        # -----------------------------------------------------
+        raw_body = request.body or b""
+
+        if not raw_body:
+            return JsonResponse({"error": "El cuerpo de la petición está vacío"}, status=400)
+
+        pdf_bytes = raw_body
+
+        # Caso 1: Si empieza por "%PDF" → Es PDF binario real
+        if raw_body.startswith(b"%PDF"):
+            pdf_bytes = raw_body
+
+        else:
+            # Caso 2: Intentar decodificar base64
+            try:
+                pdf_bytes = base64.b64decode(raw_body, validate=True)
+            except Exception:
+                return JsonResponse(
+                    {"error": "Los datos recibidos no son PDF válido ni base64"},
+                    status=400
+                )
+
+        # -----------------------------------------------------
+        # 2️⃣ LEER PDF CON PDFIUM
+        # -----------------------------------------------------
+        try:
+            pdf = pdfium.PdfDocument(pdf_bytes)
+        except Exception as e:
+            print("ERROR PDFIUM:", e)
+            return JsonResponse({"error": "El PDF no pudo ser leído por pdfium"}, status=400)
 
         imagenes = []
 
-        # 2️⃣ Convertir cada página a imagen rasterizada
+        # -----------------------------------------------------
+        # 3️⃣ CONVERTIR CADA PÁGINA EN IMAGEN
+        # -----------------------------------------------------
         for i in range(len(pdf)):
             page = pdf[i]
-
-            # render a DPI 150
-            bitmap = page.render(scale=150/72)   
+            bitmap = page.render(scale=150 / 72)   # DPI 150
             pil_image = bitmap.to_pil()
 
-            # Convertir a RGB plano
+            # Convertir a RGB y poner fondo blanco
             rgb_image = pil_image.convert("RGB")
-
-            # Fondo blanco
             fondo = Image.new("RGB", rgb_image.size, (255, 255, 255))
             fondo.paste(rgb_image)
-
             imagenes.append(fondo)
 
-        # 3️⃣ Unir imágenes en un solo PDF
+        # -----------------------------------------------------
+        # 4️⃣ UNIR TODAS LAS IMÁGENES EN UN SOLO PDF
+        # -----------------------------------------------------
         buffer_pdf = BytesIO()
         imagenes[0].save(
             buffer_pdf,
@@ -61,11 +89,14 @@ def convertir_pdf_imagenes(request):
             append_images=imagenes[1:]
         )
 
-        # 4️⃣ Convertir a Base64
         pdf_unido_bytes = buffer_pdf.getvalue()
         pdf_unido_base64 = base64.b64encode(pdf_unido_bytes).decode("utf-8")
 
+        # -----------------------------------------------------
+        # 5️⃣ RESPUESTA FINAL
+        # -----------------------------------------------------
         return JsonResponse({"pdf_unido": pdf_unido_base64}, status=200)
 
     except Exception as e:
+        print("ERROR GENERAL convertir_pdf_imagenes:", repr(e))
         return JsonResponse({"error": str(e)}, status=500)
