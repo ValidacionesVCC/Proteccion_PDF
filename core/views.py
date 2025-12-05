@@ -1,18 +1,17 @@
 import base64
 from io import BytesIO
-
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 
 import pypdfium2 as pdfium
 from PIL import Image
+import subprocess
+import tempfile
+import os
 
 
+@csrf_exempt
 def health(request):
-    """
-    Endpoint simple para que puedas probar:
-    https://proteccion-pdf.onrender.com/api/health/
-    """
     return JsonResponse({"status": "ok", "message": "Servidor activo"})
 
 
@@ -22,39 +21,65 @@ def convertir_pdf_imagenes(request):
         if request.method != "POST":
             return JsonResponse({"error": "Método no permitido"}, status=405)
 
-        # PDF en bruto recibido desde Power Automate
+        # Recibir PDF en bytes
         pdf_bytes = request.body
-
-        # Abrir PDF con pypdfium2
         pdf = pdfium.PdfDocument(pdf_bytes)
 
+        # Convertir todas las páginas a imágenes
         imagenes = []
-        num_paginas = len(pdf)
-
-        if num_paginas == 0:
-            return JsonResponse({"error": "El PDF no tiene páginas"}, status=400)
-
-        for i in range(num_paginas):
+        for i in range(len(pdf)):
             page = pdf[i]
-            # renderizar con un pequeño zoom para mejor calidad
-            bitmap = page.render(scale=2)
-            pil_image = bitmap.to_pil()
+            bitmap = page.render(scale=2)  # alta calidad, luego la bajamos
+            pil_image = bitmap.to_pil().convert("RGB")
             imagenes.append(pil_image)
 
-        # Unir todas las imágenes en un solo PDF (todas rasterizadas)
-        buffer_pdf = BytesIO()
+        # Unir imágenes en un PDF temporal
+        buffer_temp_pdf = BytesIO()
         imagenes[0].save(
-            buffer_pdf,
+            buffer_temp_pdf,
             format="PDF",
             save_all=True,
             append_images=imagenes[1:]
         )
 
-        pdf_unido_bytes = buffer_pdf.getvalue()
-        pdf_unido_base64 = base64.b64encode(pdf_unido_bytes).decode("utf-8")
+        # Guardamos PDF temporal en disco
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_in:
+            temp_in.write(buffer_temp_pdf.getvalue())
+            temp_in_path = temp_in.name
 
-        return JsonResponse({"pdf_unido": pdf_unido_base64})
+        # Archivo de salida
+        temp_out_path = temp_in_path.replace(".pdf", "_secure.pdf")
+
+        # 🔥 GHOSTSCRIPT – NIVEL DE PROTECCIÓN MÁXIMA SIN DRM
+        gs_command = [
+            "gs",
+            "-sDEVICE=pdfwrite",
+            "-dCompatibilityLevel=1.3",
+            "-dPDFSETTINGS=/screen",
+            "-dDetectDuplicateImages=false",
+            "-dDownsampleColorImages=true",
+            "-dColorImageResolution=120",
+            "-dNOPAUSE",
+            "-dQUIET",
+            "-dBATCH",
+            "-sOutputFile=" + temp_out_path,
+            temp_in_path
+        ]
+
+        subprocess.run(gs_command, check=True)
+
+        # Leer PDF final seguro
+        with open(temp_out_path, "rb") as f:
+            final_pdf_bytes = f.read()
+
+        # Convertir a Base64 para Power Automate
+        pdf_final_base64 = base64.b64encode(final_pdf_bytes).decode("utf-8")
+
+        # Borrar temporales
+        os.remove(temp_in_path)
+        os.remove(temp_out_path)
+
+        return JsonResponse({"pdf_unido": pdf_final_base64})
 
     except Exception as e:
-        # Esto ayuda a ver el error exacto en los logs de Render
         return JsonResponse({"error": str(e)}, status=500)
