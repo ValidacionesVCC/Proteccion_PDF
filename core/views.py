@@ -4,24 +4,11 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from PIL import Image
 import pypdfium2 as pdfium
+from PyPDF2 import PdfMerger, PdfReader, PdfWriter
 
 
 # =========================================================
-# 🔵 HOME PAGE PARA RUTA "/"
-# =========================================================
-def home(request):
-    return JsonResponse({"status": "Servidor Proteccion PDF activo"})
-
-
-# =========================================================
-# 🔵 ENDPOINT DE SALUD (Render lo usa para verificar vida)
-# =========================================================
-def health(request):
-    return JsonResponse({"status": "ok"})
-
-
-# =========================================================
-# 🔒 SUPER PROTECCIÓN PDF → IMÁGENES → PDF (DPI 150)
+# 🔥 SUPER PROTECCIÓN PDF EN BLOQUES + JPEG DESTRUCTIVO
 # =========================================================
 @csrf_exempt
 def convertir_pdf_imagenes(request):
@@ -29,74 +16,101 @@ def convertir_pdf_imagenes(request):
         if request.method != "POST":
             return JsonResponse({"error": "Método no permitido"}, status=405)
 
-        # -----------------------------------------------------
-        # 1️⃣ RECIBIR PDF EN RAW (BINARIO O BASE64)
-        # -----------------------------------------------------
-        raw_body = request.body or b""
+        # PDF original completo
+        pdf_bytes = request.body
+        pdf = pdfium.PdfDocument(pdf_bytes)
+        total_paginas = len(pdf)
 
-        if not raw_body:
-            return JsonResponse({"error": "El cuerpo de la petición está vacío"}, status=400)
+        # 🔹 Tamaño del bloque
+        BLOQUE = 25
 
-        pdf_bytes = raw_body
+        pdfs_procesados = []
 
-        # Caso 1: Si empieza por "%PDF" → Es PDF binario real
-        if raw_body.startswith(b"%PDF"):
-            pdf_bytes = raw_body
+        # =========================================================
+        # 🔵 PROCESAR EL PDF EN BLOQUES DE 25 PAGINAS
+        # =========================================================
+        for inicio in range(0, total_paginas, BLOQUE):
+            fin = min(inicio + BLOQUE, total_paginas)
+            imagenes_bloque = []
 
-        else:
-            # Caso 2: Intentar decodificar base64
-            try:
-                pdf_bytes = base64.b64decode(raw_body, validate=True)
-            except Exception:
-                return JsonResponse(
-                    {"error": "Los datos recibidos no son PDF válido ni base64"},
-                    status=400
-                )
+            for i in range(inicio, fin):
+                page = pdf[i]
 
-        # -----------------------------------------------------
-        # 2️⃣ LEER PDF CON PDFIUM
-        # -----------------------------------------------------
-        try:
-            pdf = pdfium.PdfDocument(pdf_bytes)
-        except Exception as e:
-            print("ERROR PDFIUM:", e)
-            return JsonResponse({"error": "El PDF no pudo ser leído por pdfium"}, status=400)
+                # Render de página (150 DPI)
+                bitmap = page.render(scale=150/72)
+                pil_image = bitmap.to_pil()
 
-        imagenes = []
+                # Convertir a RGB
+                rgb = pil_image.convert("RGB")
 
-        # -----------------------------------------------------
-        # 3️⃣ CONVERTIR CADA PÁGINA EN IMAGEN
-        # -----------------------------------------------------
-        for i in range(len(pdf)):
-            page = pdf[i]
-            bitmap = page.render(scale=150 / 72)   # DPI 150
-            pil_image = bitmap.to_pil()
+                # =====================================================
+                # 🔥 CAPA DE SEGURIDAD 1 — CONVERTIR A JPEG DESTRUCTIVO
+                # (rompe toda capa vectorial y textual oculta)
+                jpeg_buffer = BytesIO()
+                rgb.save(jpeg_buffer, format="JPEG", quality=85)
+                jpeg_buffer.seek(0)
 
-            # Convertir a RGB y poner fondo blanco
-            rgb_image = pil_image.convert("RGB")
-            fondo = Image.new("RGB", rgb_image.size, (255, 255, 255))
-            fondo.paste(rgb_image)
-            imagenes.append(fondo)
+                # Volver a abrir como imagen pura JPEG
+                jpg_image = Image.open(jpeg_buffer)
 
-        # -----------------------------------------------------
-        # 4️⃣ UNIR TODAS LAS IMÁGENES EN UN SOLO PDF
-        # -----------------------------------------------------
-        buffer_pdf = BytesIO()
-        imagenes[0].save(
-            buffer_pdf,
-            format="PDF",
-            save_all=True,
-            append_images=imagenes[1:]
-        )
+                # Fondo blanco (asegura raster 100%)
+                fondo = Image.new("RGB", jpg_image.size, (255, 255, 255))
+                fondo.paste(jpg_image)
 
-        pdf_unido_bytes = buffer_pdf.getvalue()
-        pdf_unido_base64 = base64.b64encode(pdf_unido_bytes).decode("utf-8")
+                imagenes_bloque.append(fondo)
 
-        # -----------------------------------------------------
-        # 5️⃣ RESPUESTA FINAL
-        # -----------------------------------------------------
-        return JsonResponse({"pdf_unido": pdf_unido_base64}, status=200)
+            # Crear PDF del bloque procesado
+            buffer_bloque = BytesIO()
+            imagenes_bloque[0].save(
+                buffer_bloque,
+                format="PDF",
+                save_all=True,
+                append_images=imagenes_bloque[1:]
+            )
+            pdfs_procesados.append(buffer_bloque.getvalue())
+
+
+        # =========================================================
+        # 🔵 UNIR TODOS LOS PDFs BLOQUE EN UN SOLO PDF FINAL
+        # =========================================================
+        merger = PdfMerger()
+        for pdf_b in pdfs_procesados:
+            merger.append(BytesIO(pdf_b))
+
+        buffer_unido = BytesIO()
+        merger.write(buffer_unido)
+        merger.close()
+
+        pdf_unido_bytes = buffer_unido.getvalue()
+
+        # =========================================================
+        # 🔥 LIMPIAR METADATA (sin cifrado)
+        # =========================================================
+        reader = PdfReader(BytesIO(pdf_unido_bytes))
+        writer = PdfWriter()
+
+        for page in reader.pages:
+            writer.add_page(page)
+
+        writer.add_metadata({
+            "/Title": "",
+            "/Author": "",
+            "/Subject": "",
+            "/Keywords": "",
+            "/Creator": "",
+            "/Producer": "",
+        })
+
+        # Guardar PDF final SIN CONTRASEÑA
+        buffer_final = BytesIO()
+        writer.write(buffer_final)
+        pdf_final_bytes = buffer_final.getvalue()
+
+        # Respuesta Base64 para Power Automate
+        pdf_base64 = base64.b64encode(pdf_final_bytes).decode("utf-8")
+
+        return JsonResponse({"pdf_unido": pdf_base64}, status=200)
 
     except Exception as e:
-        print("ERROR GENERAL convertir_pdf_imagenes:", repr(e))
         return JsonResponse({"error": str(e)}, status=500)
+
