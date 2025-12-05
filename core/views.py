@@ -7,7 +7,14 @@ import pypdfium2 as pdfium
 
 
 # =========================================================
-# 🔵 ENDPOINT DE SALUD (Render lo necesita SIEMPRE)
+# 🔵 HOME PAGE PARA RUTA "/"
+# =========================================================
+def home(request):
+    return JsonResponse({"status": "Servidor Proteccion PDF activo"})
+
+
+# =========================================================
+# 🔵 ENDPOINT DE SALUD (Render lo usa para verificar vida)
 # =========================================================
 def health(request):
     return JsonResponse({"status": "ok"})
@@ -22,38 +29,31 @@ def convertir_pdf_imagenes(request):
         if request.method != "POST":
             return JsonResponse({"error": "Método no permitido"}, status=405)
 
-        # =========================================================
-        # 1️⃣ Recibir PDF en bytes
-        # =========================================================
+        # 1️⃣ Recibir PDF crudo en bytes
         pdf_bytes = request.body
         pdf = pdfium.PdfDocument(pdf_bytes)
 
         imagenes = []
 
-        # =========================================================
-        # 2️⃣ Convertir cada página → imagen rasterizada
-        # =========================================================
+        # 2️⃣ Convertir cada página a imagen rasterizada
         for i in range(len(pdf)):
             page = pdf[i]
 
             # render a DPI 150
-            bitmap = page.render(scale=150/72)   # 72 DPI → base
+            bitmap = page.render(scale=150/72)   
             pil_image = bitmap.to_pil()
 
-            # Convertir a RGB plano (elimina transparencia y capas)
+            # Convertir a RGB plano
             rgb_image = pil_image.convert("RGB")
 
-            # Fondo blanco garantizado
+            # Fondo blanco
             fondo = Image.new("RGB", rgb_image.size, (255, 255, 255))
             fondo.paste(rgb_image)
 
             imagenes.append(fondo)
 
-        # =========================================================
-        # 3️⃣ Unir todas las imágenes en 1 solo PDF
-        # =========================================================
+        # 3️⃣ Unir imágenes en un solo PDF
         buffer_pdf = BytesIO()
-
         imagenes[0].save(
             buffer_pdf,
             format="PDF",
@@ -61,9 +61,7 @@ def convertir_pdf_imagenes(request):
             append_images=imagenes[1:]
         )
 
-        # =========================================================
-        # 4️⃣ Convertir el PDF final → Base64
-        # =========================================================
+        # 4️⃣ Convertir a Base64
         pdf_unido_bytes = buffer_pdf.getvalue()
         pdf_unido_base64 = base64.b64encode(pdf_unido_bytes).decode("utf-8")
 
